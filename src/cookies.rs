@@ -97,42 +97,43 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
                             });
                         }
                         
-                        // 如果有refresh_token，确保SESSDATA存在，并单独添加refresh_token
-                        if let Some(refresh_token_str) = token_info_val.get("refresh_token").and_then(|t| t.as_str()) {
-                            if !refresh_token_str.is_empty() {
-                                // 确保SESSDATA (使用refresh_token的值)
-                                if !cookies.iter().any(|c: &CookieItem| c.name == "SESSDATA") {
-                                    cookies.push(CookieItem {
-                                        name: "SESSDATA".to_string(), 
-                                        value: refresh_token_str.to_string(),
-                                        domain: ".bilibili.com".to_string(),
-                                        path: "/".to_string(),
-                                        expires: None,
-                                        http_only: true,
-                                        secure: true,
-                                    });
-                                }
-                                // 单独添加 refresh_token
-                                if !cookies.iter().any(|c: &CookieItem| c.name == "refresh_token") {
-                                    cookies.push(CookieItem {
-                                        name: "refresh_token".to_string(),
-                                        value: refresh_token_str.to_string(),
-                                        domain: ".bilibili.com".to_string(), 
-                                        path: "/".to_string(),
-                                        expires: None, 
-                                        http_only: false, 
-                                        secure: false,  
-                                    });
-                                }
+                        // refresh_token 处理
+                        if let Some(refresh_token_json_val) = token_info_val.get("refresh_token") {
+                            let refresh_token_str = refresh_token_json_val.as_str().unwrap_or("").to_string();
+                            // 确保SESSDATA (如果不存在且refresh_token非空才用其填充)
+                            if !refresh_token_str.is_empty() && !cookies.iter().any(|c: &CookieItem| c.name == "SESSDATA") {
+                                cookies.push(CookieItem {
+                                    name: "SESSDATA".to_string(), 
+                                    value: refresh_token_str.clone(),
+                                    domain: ".bilibili.com".to_string(),
+                                    path: "/".to_string(),
+                                    expires: None,
+                                    http_only: true,
+                                    secure: true,
+                                });
+                            }
+                            // 始终尝试添加 refresh_token CookieItem, 即使其值为空
+                            if !cookies.iter().any(|c: &CookieItem| c.name == "refresh_token") {
+                                cookies.push(CookieItem {
+                                    name: "refresh_token".to_string(),
+                                    value: refresh_token_str, // value 可能为空
+                                    domain: ".bilibili.com".to_string(), 
+                                    path: "/".to_string(),
+                                    expires: None, 
+                                    http_only: false, 
+                                    secure: false,  
+                                });
                             }
                         }
 
-                        // Extract access_token
-                        if let Some(access_token_str) = token_info_val.get("access_token").and_then(|t| t.as_str()) {
-                            if !access_token_str.is_empty() && !cookies.iter().any(|c: &CookieItem| c.name == "access_token") {
+                        // access_token 处理
+                        if let Some(access_token_json_val) = token_info_val.get("access_token") {
+                            let access_token_str = access_token_json_val.as_str().unwrap_or("").to_string();
+                            // 始终尝试添加 access_token CookieItem, 即使其值为空
+                            if !cookies.iter().any(|c: &CookieItem| c.name == "access_token") {
                                 cookies.push(CookieItem {
                                     name: "access_token".to_string(),
-                                    value: access_token_str.to_string(),
+                                    value: access_token_str, // value 可能为空
                                     domain: ".bilibili.com".to_string(), 
                                     path: "/".to_string(),
                                     expires: None, 
@@ -402,8 +403,8 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
     // 7. 确保所有重要的cookie都存在
     ensure_important_cookies(&mut cookies, login_result);
     
-    // 8. 过滤掉值为空的Cookie
-    cookies.retain(|c| !c.value.is_empty());
+    // 8. 恢复过滤掉值为空的Cookie的逻辑
+    cookies.retain(|c| !c.value.is_empty()); 
     
     if cookies.is_empty() {
         return Err(BiliError::CookieError("未找到B站相关的Cookie".to_string()).into());

@@ -47,12 +47,12 @@ async fn main() -> Result<()> {
     let cookies = cookies::extract_cookies(&login_result).await?;
     
     // ---- 临时调试代码 开始 ----
-     println!("\nDEBUG: 全部提取到的Cookies:");
-     for cookie in &cookies {
-         println!("  Name: {}, Value: {}, Domain: {}, Path: {}, Expires: {:?}, HTTPOnly: {}, Secure: {}", 
-                  cookie.name, cookie.value, cookie.domain, cookie.path, cookie.expires, cookie.http_only, cookie.secure);
-     }
-     println!("---- 临时调试代码 结束 ----\n");
+    // println!("\nDEBUG: 全部提取到的Cookies:");
+    // for cookie in &cookies {
+    //      println!("  Name: {}, Value: {}, Domain: {}, Path: {}, Expires: {:?}, HTTPOnly: {}, Secure: {}", 
+    //               cookie.name, cookie.value, cookie.domain, cookie.path, cookie.expires, cookie.http_only, cookie.secure);
+    //  }
+    // println!("---- 临时调试代码 结束 ----\n");
     // ---- 临时调试代码 结束 ----
     
     let important_cookies = cookies::get_important_cookies(&cookies);
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     let has_key_cookies = has_sessdata && has_dedeuserid; // bili_jct is important but sometimes not easily available initially
     
     if has_key_cookies {
-        println!("{}", "✓ 已成功获取关键Cookie".green().bold());
+        println!("{}", "✓ 已成功获取Cookie".green().bold());
         if let Some(uid_cookie) = cookies.iter().find(|c| c.name == "DedeUserID") {
             println!("{} {}", "用户ID:".cyan(), uid_cookie.value);
         }
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
             println!("{} {}", "用户名:".cyan(), "未知".yellow());
         }
         println!("{} {}", "Cookie数量:".cyan(), cookies.len());
-        println!("\n{}", "关键Cookie (部分):".yellow().bold());
+        println!("\n{}", "Cookie (部分):".yellow().bold());
         for cookie_name in ["SESSDATA", "DedeUserID", "bili_jct", "sid"] {
             if let Some(cookie) = cookies.iter().find(|c| c.name == cookie_name) {
                 println!("  {}: {}", cookie.name.cyan(), cookie.value);
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
             println!("\n{}", "注意: 未能自动获取bili_jct(CSRF令牌)。部分操作可能受限。".yellow());
         }
     } else {
-        println!("{}", "⚠ 警告: 未获取到足够的关键Cookie (SESSDATA 和 DedeUserID)".yellow().bold());
+        println!("{}", "⚠ 警告: 未获取到足够的Cookie (SESSDATA 和 DedeUserID)".yellow().bold());
     }
     
     let (output_format_to_use, default_filename_stem, default_extension) = 
