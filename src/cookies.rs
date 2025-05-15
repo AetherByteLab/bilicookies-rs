@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use reqwest::header::{HeaderMap, SET_COOKIE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,8 +83,8 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
                     }
                     
                     // 从token_info中提取信息
-                    if let Some(token_info) = data.get("token_info") {
-                        let mid = token_info.get("mid").and_then(|m| m.as_u64()).unwrap_or(0);
+                    if let Some(token_info_val) = data.get("token_info") {
+                        let mid = token_info_val.get("mid").and_then(|m| m.as_u64()).unwrap_or(0);
                         if mid > 0 && !cookies.iter().any(|c: &CookieItem| c.name == "DedeUserID") {
                             cookies.push(CookieItem {
                                 name: "DedeUserID".to_string(),
@@ -97,8 +97,8 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
                             });
                         }
                         
-                        // 如果有token，确保SESSDATA存在
-                        if let Some(token) = token_info.get("refresh_token").and_then(|t| t.as_str()) {
+                        // 如果有token，确保SESSDATA存在 (this uses refresh_token for SESSDATA value)
+                        if let Some(token) = token_info_val.get("refresh_token").and_then(|t| t.as_str()) {
                             if !token.is_empty() && !cookies.iter().any(|c: &CookieItem| c.name == "SESSDATA") {
                                 cookies.push(CookieItem {
                                     name: "SESSDATA".to_string(), 
@@ -108,6 +108,36 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
                                     expires: None,
                                     http_only: true,
                                     secure: true,
+                                });
+                            }
+                        }
+
+                        // Extract access_token
+                        if let Some(access_token_str) = token_info_val.get("access_token").and_then(|t| t.as_str()) {
+                            if !access_token_str.is_empty() && !cookies.iter().any(|c: &CookieItem| c.name == "access_token") {
+                                cookies.push(CookieItem {
+                                    name: "access_token".to_string(),
+                                    value: access_token_str.to_string(),
+                                    domain: ".bilibili.com".to_string(), 
+                                    path: "/".to_string(),
+                                    expires: None, 
+                                    http_only: false, 
+                                    secure: false,  
+                                });
+                            }
+                        }
+
+                        // Extract expires_in
+                        if let Some(expires_in_num) = token_info_val.get("expires_in").and_then(|e| e.as_i64()) {
+                             if !cookies.iter().any(|c: &CookieItem| c.name == "access_token_expires_in") {
+                                cookies.push(CookieItem {
+                                    name: "access_token_expires_in".to_string(),
+                                    value: expires_in_num.to_string(),
+                                    domain: ".bilibili.com".to_string(),
+                                    path: "/".to_string(),
+                                    expires: None,
+                                    http_only: false,
+                                    secure: false,
                                 });
                             }
                         }
@@ -464,34 +494,29 @@ fn ensure_important_cookies(cookies: &mut Vec<CookieItem>, login_result: &LoginR
 fn parse_cookies(headers: &HeaderMap) -> Result<Vec<CookieItem>> {
     let mut cookies = Vec::new();
     
-    // 获取所有的Set-Cookie头，而不仅仅是第一个
     for cookie_header in headers.get_all(SET_COOKIE) {
         if let Ok(cookie_str) = cookie_header.to_str() {
-            // 解析每个cookie
             let cookie_parts: Vec<&str> = cookie_str.split(';').collect();
             if cookie_parts.is_empty() {
-                continue; // 跳过无效的cookie
+                continue;
             }
             
-            // 解析name=value部分
-            let name_value: Vec<&str> = cookie_parts[0].split('=').collect();
+            let name_value: Vec<&str> = cookie_parts[0].splitn(2, '=').collect(); // splitn(2, '=') to handle values with '='
             if name_value.len() < 2 {
-                continue; // 跳过无效的cookie
+                continue;
             }
             
             let name = name_value[0].trim().to_string();
-            // 将剩余部分作为值（可能包含等号）
-            let value = name_value[1..].join("=").trim().to_string();
+            let value = name_value[1].trim().to_string();
             
-            // 解析其他属性
-            let mut domain = ".bilibili.com".to_string();
-            let mut path = "/".to_string();
-            let expires = None;
+            let mut domain = ".bilibili.com".to_string(); // Default domain
+            let mut path = "/".to_string(); // Default path
+            let mut expires_dt: Option<DateTime<Utc>> = None;
             let mut http_only = false;
             let mut secure = false;
             
             for part in &cookie_parts[1..] {
-                let attr_parts: Vec<&str> = part.split('=').collect();
+                let attr_parts: Vec<&str> = part.splitn(2, '=').collect();
                 if attr_parts.is_empty() {
                     continue;
                 }
@@ -509,7 +534,29 @@ fn parse_cookies(headers: &HeaderMap) -> Result<Vec<CookieItem>> {
                         }
                     },
                     "expires" => {
-                        // 简化处理，不解析过期时间
+                        if attr_parts.len() > 1 {
+                            let date_str = attr_parts[1].trim();
+                            // Try common cookie date formats
+                            if let Ok(dt) = DateTime::parse_from_rfc2822(date_str) {
+                                expires_dt = Some(dt.with_timezone(&Utc));
+                            } else if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%a, %d-%b-%Y %H:%M:%S GMT") {
+                                expires_dt = Some(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+                            } else if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%a, %d %b %Y %H:%M:%S GMT") {
+                                 expires_dt = Some(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+                            }
+                            // Add more formats if necessary, e.g., with different timezone abbreviations or no timezone
+                        }
+                    },
+                    "max-age" => {
+                        if attr_parts.len() > 1 {
+                            if let Ok(seconds) = attr_parts[1].trim().parse::<i64>() {
+                                if seconds <= 0 {
+                                    expires_dt = Some(Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now)); // Expire immediately
+                                } else {
+                                    expires_dt = Some(Utc::now() + chrono::Duration::seconds(seconds));
+                                }
+                            }
+                        }
                     },
                     "httponly" => http_only = true,
                     "secure" => secure = true,
@@ -517,7 +564,6 @@ fn parse_cookies(headers: &HeaderMap) -> Result<Vec<CookieItem>> {
                 }
             }
             
-            // 只添加B站相关的Cookie或重要的Cookie
             if domain.contains("bilibili") || domain.contains("bili") || 
                name.eq_ignore_ascii_case("SESSDATA") || name.eq_ignore_ascii_case("bili_jct") || 
                name.eq_ignore_ascii_case("DedeUserID") || name.eq_ignore_ascii_case("DedeUserID__ckMd5") ||
@@ -527,7 +573,7 @@ fn parse_cookies(headers: &HeaderMap) -> Result<Vec<CookieItem>> {
                     value,
                     domain,
                     path,
-                    expires,
+                    expires: expires_dt,
                     http_only,
                     secure,
                 });
@@ -535,15 +581,14 @@ fn parse_cookies(headers: &HeaderMap) -> Result<Vec<CookieItem>> {
         }
     }
     
-    // 如果仍然找不到cookies，则从Cookie头中尝试提取
     if cookies.is_empty() && headers.contains_key("Cookie") {
         if let Some(cookie_header) = headers.get("Cookie") {
             if let Ok(cookie_str) = cookie_header.to_str() {
                 for cookie_part in cookie_str.split(';') {
-                    let parts: Vec<&str> = cookie_part.split('=').collect();
+                    let parts: Vec<&str> = cookie_part.splitn(2, '=').collect();
                     if parts.len() >= 2 {
                         let name = parts[0].trim().to_string();
-                        let value = parts[1..].join("=").trim().to_string();
+                        let value = parts[1].trim().to_string();
                         
                         cookies.push(CookieItem {
                             name,
@@ -560,7 +605,6 @@ fn parse_cookies(headers: &HeaderMap) -> Result<Vec<CookieItem>> {
         }
     }
     
-    // 对于解析来的结果，我们不需要检查是否为空，让调用者决定如何处理
     Ok(cookies)
 }
 
