@@ -90,4 +90,4 @@ src/
 
 ## 许可证
 
-[MIT](LICENSE) (如果项目使用MIT许可证，请确保根目录下存在 `LICENSE` 文件) 
+[MIT](LICENSE)
