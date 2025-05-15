@@ -97,18 +97,33 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
                             });
                         }
                         
-                        // 如果有token，确保SESSDATA存在 (this uses refresh_token for SESSDATA value)
-                        if let Some(token) = token_info_val.get("refresh_token").and_then(|t| t.as_str()) {
-                            if !token.is_empty() && !cookies.iter().any(|c: &CookieItem| c.name == "SESSDATA") {
-                                cookies.push(CookieItem {
-                                    name: "SESSDATA".to_string(), 
-                                    value: token.to_string(),
-                                    domain: ".bilibili.com".to_string(),
-                                    path: "/".to_string(),
-                                    expires: None,
-                                    http_only: true,
-                                    secure: true,
-                                });
+                        // 如果有refresh_token，确保SESSDATA存在，并单独添加refresh_token
+                        if let Some(refresh_token_str) = token_info_val.get("refresh_token").and_then(|t| t.as_str()) {
+                            if !refresh_token_str.is_empty() {
+                                // 确保SESSDATA (使用refresh_token的值)
+                                if !cookies.iter().any(|c: &CookieItem| c.name == "SESSDATA") {
+                                    cookies.push(CookieItem {
+                                        name: "SESSDATA".to_string(), 
+                                        value: refresh_token_str.to_string(),
+                                        domain: ".bilibili.com".to_string(),
+                                        path: "/".to_string(),
+                                        expires: None,
+                                        http_only: true,
+                                        secure: true,
+                                    });
+                                }
+                                // 单独添加 refresh_token
+                                if !cookies.iter().any(|c: &CookieItem| c.name == "refresh_token") {
+                                    cookies.push(CookieItem {
+                                        name: "refresh_token".to_string(),
+                                        value: refresh_token_str.to_string(),
+                                        domain: ".bilibili.com".to_string(), 
+                                        path: "/".to_string(),
+                                        expires: None, 
+                                        http_only: false, 
+                                        secure: false,  
+                                    });
+                                }
                             }
                         }
 
@@ -127,15 +142,19 @@ pub async fn extract_cookies(login_result: &LoginResult) -> Result<Vec<CookieIte
                             }
                         }
 
-                        // Extract expires_in
+                        // Extract expires_in for access_token
                         if let Some(expires_in_num) = token_info_val.get("expires_in").and_then(|e| e.as_i64()) {
                              if !cookies.iter().any(|c: &CookieItem| c.name == "access_token_expires_in") {
+                                // Calculate expiry date for access_token
+                                let now = Utc::now();
+                                let expires_dt = now + chrono::Duration::seconds(expires_in_num);
+
                                 cookies.push(CookieItem {
                                     name: "access_token_expires_in".to_string(),
-                                    value: expires_in_num.to_string(),
+                                    value: expires_in_num.to_string(), // Store original seconds
                                     domain: ".bilibili.com".to_string(),
                                     path: "/".to_string(),
-                                    expires: None,
+                                    expires: Some(expires_dt), // Store calculated expiry DateTime
                                     http_only: false,
                                     secure: false,
                                 });
