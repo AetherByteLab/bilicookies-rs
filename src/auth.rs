@@ -1,115 +1,121 @@
 use anyhow::Result;
-use colored::Colorize;
+use colored::*;
 use qrcode::QrCode;
-use reqwest::{Client, cookie::Jar};
-use std::{sync::Arc, time::Duration};
-use tokio::time;
+use image::{ImageBuffer, Luma};
+use reqwest::Client;
+use std::time::Duration;
+use tokio::time::sleep;
 
-use crate::{api, error::BiliError};
+use crate::api::{generate_qrcode, poll_qrcode, QrCodePollData, UserInfoData, get_user_info, create_client};
+use crate::error::BiliError;
 
-// 二维码轮询间隔
-const POLL_INTERVAL_MS: u64 = 1000;
-// 二维码过期时间（秒）
-const QR_CODE_EXPIRE_SECONDS: u64 = 180;
-
-// 二维码状态码
-const QR_CODE_STATUS_SCANNED: i32 = 86038; // 已扫码
-const QR_CODE_STATUS_CONFIRMED: i32 = 0;   // 已确认登录
-const QR_CODE_STATUS_EXPIRED: i32 = 86039; // 已过期
-
-/// 登录响应
+/// 登录成功后的结果
 #[derive(Debug)]
 pub struct LoginResult {
-    pub client: Client,
-    #[allow(dead_code)]
-    pub cookie_jar: Arc<Jar>,
-    #[allow(dead_code)]
-    pub refresh_token: String,
-    #[allow(dead_code)]
-    pub uid: u64,
-    #[allow(dead_code)]
+    pub client: Client, 
+    pub refresh_token: String, 
+    pub uid: u64, 
     pub username: String,
 }
 
-/// 使用二维码登录B站账号
+// 二维码状态常量 (根据B站API文档或经验)
+const QR_CODE_STATUS_SUCCESS: i32 = 0;         // 成功 (已确认)
+const QR_CODE_STATUS_SCANNED: i32 = 86038;       // 已扫描，待确认
+const QR_CODE_STATUS_EXPIRED: i32 = 86039;       // 二维码已过期
+const QR_CODE_STATUS_NOT_SCANNED_YET: i32 = 86101; // 未扫描 (或还在初始化)
+
+// 二维码登录流程
 pub async fn login_with_qrcode() -> Result<LoginResult> {
-    // 创建客户端
-    let (client, cookie_jar) = api::create_client()?;
-    
-    // 获取二维码
-    let qr_data = api::generate_qrcode(&client).await?;
-    
-    // 显示二维码
-    display_qrcode(&qr_data.url)?;
-    
-    println!("{}", "请使用B站手机APP扫描上方二维码并确认登录...".yellow());
-    
-    // 轮询二维码状态
-    let mut interval = time::interval(Duration::from_millis(POLL_INTERVAL_MS));
-    let start = std::time::Instant::now();
-    
-    loop {
-        interval.tick().await;
-        
-        // 检查是否超时
-        if start.elapsed().as_secs() > QR_CODE_EXPIRE_SECONDS {
-            return Err(BiliError::LoginError("二维码已过期，请重新运行程序".to_string()).into());
-        }
-        
-        let poll_result = api::poll_qrcode(&client, &qr_data.qrcode_key).await;
-        
-        match poll_result {
-            Ok(data) => {
-                match data.code {
-                    QR_CODE_STATUS_SCANNED => {
-                        println!("{}", "已扫描二维码，请在手机上确认登录...".yellow());
-                    },
-                    QR_CODE_STATUS_CONFIRMED => {
-                        println!("{}", "扫码成功，正在获取用户信息...".green());
-                        
-                        // 获取用户信息
-                        let user_info = api::get_user_info(&client).await?;
-                        
-                        if user_info.is_login {
-                            return Ok(LoginResult {
-                                client,
-                                cookie_jar,
-                                refresh_token: data.refresh_token,
-                                uid: user_info.mid,
-                                username: user_info.uname,
-                            });
-                        } else {
-                            return Err(BiliError::LoginError("登录状态校验失败".to_string()).into());
-                        }
-                    },
-                    QR_CODE_STATUS_EXPIRED => {
-                        return Err(BiliError::LoginError("二维码已过期，请重新运行程序".to_string()).into());
-                    },
-                    _ => {
-                        // 继续轮询
+    let client = create_client()?;
+    let qr_data = generate_qrcode(&client).await?; 
+    let code_for_image = QrCode::new(qr_data.url.as_bytes())?; // For image generation
+    let code_for_terminal = QrCode::new(qr_data.url.as_bytes())?; // For terminal rendering
+
+    // --- 保存二维码到文件 --- 
+    let width = code_for_image.width(); 
+    if width == 0 {
+        println!("{}", "无法生成二维码图像：宽度为0".red());
+    } else {
+        let colors = code_for_image.to_colors(); // Vec<qrcode::Color>
+        let scale = 6u32;
+        let image_size = (width as u32) * scale;
+        let mut img_buf = ImageBuffer::new(image_size, image_size);
+
+        for y_qr in 0..width {
+            for x_qr in 0..width {
+                let module_index = y_qr * width + x_qr;
+                let pixel_color = match colors[module_index] {
+                    qrcode::Color::Dark => Luma([0u8]),
+                    qrcode::Color::Light => Luma([255u8]),
+                };
+                
+                for y_offset in 0..scale {
+                    for x_offset in 0..scale {
+                        img_buf.put_pixel((x_qr as u32) * scale + x_offset, (y_qr as u32) * scale + y_offset, pixel_color);
                     }
                 }
-            },
-            Err(e) => {
-                // 轮询出错，继续尝试
-                eprintln!("轮询出错: {}, 将继续尝试...", e);
-            },
+            }
+        }
+        match img_buf.save("qrcode.png") {
+            Ok(_) => println!("二维码图片已保存为 qrcode.png, 您也可以扫描此文件。"),
+            Err(e) => println!("无法保存二维码图片到文件: {}. 请扫描下方终端二维码。", e.to_string().red()),
         }
     }
-}
+    // --- 结束保存二维码到文件 ---
 
-/// 在终端显示二维码
-fn display_qrcode(url: &str) -> Result<()> {
-    // 创建二维码
-    let qr = QrCode::new(url.as_bytes())?;
-    
-    // 转为字符串显示
-    let qr_string = qr.render::<char>()
-        .quiet_zone(false)
-        .module_dimensions(2, 1)
+    // --- 终端二维码 --- 
+    let terminal_qr_string = code_for_terminal.render::<qrcode::render::unicode::Dense1x2>()
+        .dark_color(qrcode::render::unicode::Dense1x2::Light) 
+        .light_color(qrcode::render::unicode::Dense1x2::Dark)  
         .build();
-    
-    println!("{}", qr_string);
-    
-    Ok(())
+    println!("\n{}", terminal_qr_string);
+    println!("{}", "请使用B站手机APP扫描上方二维码或 qrcode.png 文件并确认登录...".yellow());
+
+    let mut poll_attempts = 0;
+    let max_poll_attempts = 90; 
+
+    loop {
+        if poll_attempts >= max_poll_attempts {
+            println!("\n{}", "✗ 轮询超时，二维码可能已过期或网络问题。".red());
+            return Err(BiliError::LoginError("二维码轮询超时或已过期".to_string()).into());
+        }
+        sleep(Duration::from_secs(2)).await; 
+        poll_attempts += 1;
+
+        let poll_data: QrCodePollData = poll_qrcode(&client, &qr_data.qrcode_key).await?;
+
+        match poll_data.code { 
+            QR_CODE_STATUS_SUCCESS => { 
+                println!("\n{}", "✓ 扫码成功!".green());
+                println!("正在获取用户信息...");
+                
+                let refresh_token = poll_data.refresh_token; 
+                
+                let user_info: UserInfoData = get_user_info(&client).await?;
+                let uid = user_info.mid; 
+                let username = user_info.uname; 
+
+                return Ok(LoginResult {
+                    client,
+                    refresh_token,
+                    uid,
+                    username,
+                });
+            }
+            QR_CODE_STATUS_NOT_SCANNED_YET => { 
+                print!("."); 
+                std::io::Write::flush(&mut std::io::stdout())?;
+            }
+            QR_CODE_STATUS_SCANNED => { 
+                println!("\n{}", "已扫描，等待App确认...".yellow());
+            }
+            QR_CODE_STATUS_EXPIRED => { 
+                println!("\n{}", "✗ 二维码已过期".red());
+                return Err(BiliError::LoginError("二维码已过期".to_string()).into());
+            }
+            other_code => { 
+                println!("\n{}", format!("未知轮询状态，代码: {}。将继续尝试...", other_code).yellow());
+            }
+        }
+    }
 } 

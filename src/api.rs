@@ -1,7 +1,7 @@
 use anyhow::Result;
-use reqwest::{Client, Response, cookie::Jar};
+use reqwest::{Client, Response};
 use serde::Deserialize;
-use std::{time::{SystemTime, UNIX_EPOCH}, sync::Arc};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::BiliError;
 
@@ -10,17 +10,14 @@ const QR_CODE_GENERATE_URL: &str = "https://passport.bilibili.com/x/passport-log
 const QR_CODE_POLL_URL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll";
 const USER_INFO_URL: &str = "https://api.bilibili.com/x/web-interface/nav";
 
-/// 创建HTTP客户端，带有cookie jar
-pub fn create_client() -> Result<(Client, Arc<Jar>)> {
-    let cookie_jar = Arc::new(Jar::default());
-    
+/// 创建HTTP客户端，带有cookie jar，并启用cookie存储
+pub fn create_client() -> Result<Client> {
     let client = Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .cookie_provider(Arc::clone(&cookie_jar))
         .cookie_store(true)
         .build()?;
     
-    Ok((client, cookie_jar))
+    Ok(client)
 }
 
 /// 获取当前时间戳（毫秒）

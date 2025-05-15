@@ -47,12 +47,12 @@ async fn main() -> Result<()> {
     let cookies = cookies::extract_cookies(&login_result).await?;
     
     // ---- 临时调试代码 开始 ----
-     println!("\nDEBUG: 全部提取到的Cookies:");
-     for cookie in &cookies {
-         println!("  Name: {}, Value: {}, Domain: {}, Path: {}, Expires: {:?}, HTTPOnly: {}, Secure: {}", 
-                  cookie.name, cookie.value, cookie.domain, cookie.path, cookie.expires, cookie.http_only, cookie.secure);
-     }
-     println!("---- 临时调试代码 结束 ----\n");
+    // println!("\nDEBUG: 全部提取到的Cookies:");
+    // for cookie in &cookies {
+    //      println!("  Name: {}, Value: {}, Domain: {}, Path: {}, Expires: {:?}, HTTPOnly: {}, Secure: {}", 
+    //               cookie.name, cookie.value, cookie.domain, cookie.path, cookie.expires, cookie.http_only, cookie.secure);
+    //  }
+    // println!("---- 临时调试代码 结束 ----\n");
     // ---- 临时调试代码 结束 ----
     
     let important_cookies = cookies::get_important_cookies(&cookies);

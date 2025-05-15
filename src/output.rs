@@ -16,18 +16,17 @@ pub fn format_as_netscape(cookies: &[CookieItem]) -> Result<String> {
     let mut output = String::from("# Netscape HTTP Cookie File\n# https://curl.se/docs/http-cookies.html\n");
     
     for cookie in cookies {
-        // 检查cookie name和value是否为空，空的cookie在某些格式中可能无效
-        if cookie.name.is_empty() || cookie.value.is_empty() {
-            continue; // 跳过无效或不完整的cookie项
+        // 只检查cookie name是否为空。允许value为空。
+        if cookie.name.is_empty() {
+            continue; // 跳过没有名称的cookie项
         }
 
         let secure_str = if cookie.secure { "TRUE" } else { "FALSE" };
         let expiry_str = match cookie.expires {
             Some(time) => time.timestamp().to_string(),
-            None => "0".to_string(), // Netscape通常用0表示会话cookie或已过期
+            None => "0".to_string(), 
         };
         
-        // Netscape格式通常要求域名以点开头，除非是主机本身设置的cookie（hostOnly=true），这里简化处理
         let domain_str = if cookie.domain.starts_with('.') || cookie.domain.matches('.').count() < 1 {
             cookie.domain.clone()
         } else {
@@ -36,13 +35,13 @@ pub fn format_as_netscape(cookies: &[CookieItem]) -> Result<String> {
         
         let line = format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            domain_str,         // domain
-            "FALSE",            // flag (TRUE if host-only, FALSE if domain cookie) - 简化为FALSE
-            cookie.path,        // path
-            secure_str,         // secure
-            expiry_str,         // expiry
-            cookie.name,        // name
-            cookie.value        // value
+            domain_str, 
+            "FALSE",    
+            cookie.path,      
+            secure_str,       
+            expiry_str,       
+            cookie.name,      
+            cookie.value      // value 可能为空字符串
         );
         
         output.push_str(&line);
@@ -76,24 +75,19 @@ struct TomlCookieListInternalWrapper<'a> {
 pub fn format_as_toml(cookies: &[CookieItem]) -> Result<String> {
     let simple_cookies = to_simple_cookies(cookies)
         .into_iter()
-        .filter(|sc| !sc.key.is_empty()) // 确保 simple_cookies 中的 key 不为空
+        // 只过滤key为空的情况。允许value为空。
+        .filter(|sc| !sc.key.is_empty()) 
         .collect::<Vec<SimpleCookie>>();
 
     if simple_cookies.is_empty() {
-        // 如果没有有效的cookies可以序列化，返回一个空的TOML table或注释
-        return Ok("# No cookies to export in TOML format.\n".to_string());
+        return Ok("# No valid cookies (with non-empty names) to export in TOML format.\n".to_string());
     }
 
-    // 将 Vec<SimpleCookie> 包装在一个结构体中，并使用描述性的字段名
     let wrapper = TomlCookieListInternalWrapper { bilicookies_rs_export: &simple_cookies };
     
     match toml::to_string_pretty(&wrapper) {
         Ok(s) => Ok(s),
         Err(e) => {
-            // 尝试打印出哪个simple_cookie导致了问题（如果可能）
-            // for sc_debug in &simple_cookies {
-            //     println!("TOML DEBUG: key='{}', value='{}'", sc_debug.key, sc_debug.value);
-            // }
             Err(anyhow::Error::new(e).context("Failed to serialize cookies to TOML"))
         }
     }
