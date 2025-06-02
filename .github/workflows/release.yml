@@ -1,0 +1,130 @@
+name: Release CI
+
+on:
+  push:
+    tags:
+      - "v*.*.*" # 匹配如 v1.0.0, v0.1.2 等标签
+
+permissions:
+  contents: write # 允许工作流创建 Release 和上传构建产物
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os_name }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # - os: ubuntu-latest
+          #   os_name: Linux
+          #   target: x86_64-unknown-linux-gnu
+          #   asset_name_suffix: linux-x86_64.tar.gz
+          #   binary_name: bilicookies-rs
+          - os: windows-latest
+            os_name: Windows
+            target: x86_64-pc-windows-msvc
+            asset_name_suffix: windows-x86_64.zip
+            binary_name: bilicookies-rs.exe
+          # - os: macos-latest
+          #   os_name: macOS (Intel)
+          #   target: x86_64-apple-darwin
+          #   asset_name_suffix: macos-x86_64.tar.gz
+          #   binary_name: bilicookies-rs
+          # 您可以取消注释并添加对 Apple Silicon (ARM64) 的支持
+          # - os: macos-latest
+          #   os_name: macOS (ARM)
+          #   target: aarch64-apple-darwin
+          #   asset_name_suffix: macos-aarch64.tar.gz
+          #   binary_name: bilicookies-rs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build binary
+        run: cargo build --verbose --release --target ${{ matrix.target }}
+        env:
+          CARGO_TERM_COLOR: always
+
+      - name: Prepare artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $stagingDir = "staging"
+          New-Item -ItemType Directory -Force -Path $stagingDir
+          Copy-Item -Path "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" -Destination "$stagingDir/"
+          Copy-Item -Path "LICENSE" -Destination "$stagingDir/"
+          Copy-Item -Path "README.md" -Destination "$stagingDir/"
+          Compress-Archive -Path "$stagingDir/*" -DestinationPath "bilicookies-rs-${{ matrix.asset_name_suffix }}"
+
+      - name: Prepare artifact (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mkdir staging
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" staging/
+          cp LICENSE staging/
+          cp README.md staging/
+          tar -czvf "bilicookies-rs-${{ matrix.asset_name_suffix }}" -C staging .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilicookies-rs-${{ matrix.target }} # 使用 target 来唯一标识 artifact
+          path: bilicookies-rs-${{ matrix.asset_name_suffix }}
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts # 所有构建产物会下载到此目录的子目录中
+
+      - name: List downloaded artifacts (for debugging)
+        run: ls -R artifacts
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          body: |
+            Release of version ${{ steps.get_version.outputs.VERSION }} of bilicookies-rs.
+
+            **Assets:**
+            (See attached files)
+          draft: false
+          prerelease: false
+          files: |
+            # artifacts/bilicookies-rs-x86_64-unknown-linux-gnu/bilicookies-rs-linux-x86_64.tar.gz
+            artifacts/bilicookies-rs-x86_64-pc-windows-msvc/bilicookies-rs-windows-x86_64.zip
+            # artifacts/bilicookies-rs-x86_64-apple-darwin/bilicookies-rs-macos-x86_64.tar.gz
+            # 如果启用了 aarch64-apple-darwin，请添加对应的产物路径
+            # artifacts/bilicookies-rs-aarch64-apple-darwin/bilicookies-rs-macos-aarch64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
